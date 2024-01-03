@@ -1,58 +1,64 @@
 #!/usr/bin/env bash
 
-# torch.fx based model surgery and training
-
 # PYTHONPATH must start with a : to be able to load local modules
 export PYTHONPATH=:$PYTHONPATH
 
-# Date/time in YYYYMMDD-HHmmSS format
-DATE_TIME=`date +'%Y%m%d-%H%M%S'`
+# Date/time in YYYY-MM-DD_HH-mm-SS format
+DATE_TIME=`date +'%Y-%m-%d_%H-%M-%S'`
 
 #=========================================================================================
-# sample models that can be used
-#model=resnet50
-#model=mobilenet_v2
-#model=mobilenet_v2
-#model=resnet18
-#model=regnetx200mf
-#model=regnetx400mf
-#model=regnetx400mf
-#model=regnetx800mf
-#model=regnetx1p6gf
-
-# these lite models are created using model surgery from models in torchvision
-# these lite models will be available only if --model-surgery <argument> argument is set to one of these
-# --model-surgery 1: legacy module based surgery
-# --model-surgery 2: advanced model surgery with torch.fx (to be released)
-#model=mobilenet_v3_large_lite
-#model=mobilenet_v3_small_lite
-model=mobilenet_v2_lite
+# *** Supported models ***
+#=========================================================================================
+# model=regnet_x_1_6gf
 
 #=========================================================================================
-# set the appropriate pretrained weights for the above model
-#model_weights="MobileNet_V2_Weights.IMAGENET1K_V1"
-#model_weights="MobileNet_V2_Weights.IMAGENET1K_V2"
-#model_weights="ResNet50_Weights.IMAGENET1K_V1"
-model_weights="../edgeai-modelzoo/models/vision/classification/imagenet1k/edgeai-tv2/mobilenet_v2_lite_wt-v2_20231101_checkpoint.pth"
-
-output_dir="./data/checkpoints/torchvision/${DATE_TIME}_imagenet_classification_${model}"
-
-val_resize_size=232 #256 #232
-val_crop_size=224
-
-# --quantization-type can be one of: WT8SP2_AT8SP2, WC8_AT8
-
+# *** Supported pre-trained weights ***
 #=========================================================================================
-command="./references/classification/train.py --data-path=./data/datasets/imagenet \
---epochs=25 --batch-size=64 --wd=4e-5 --lr=0.0001 --lr-scheduler=cosineannealinglr --lr-warmup-epochs=1 \
---model=${model} --model-surgery=2 --quantization=2 --quantization-type=WT8SP2_AT8SP2 \
---train-epoch-size-factor=0.2 --opset-version=18 --val-resize-size=$val_resize_size --val-crop-size=$val_crop_size"
+# model_weights="RegNet_X_1_6GF_Weights.IMAGENET1K_V2"
+#=========================================================================================
 
-# training: single GPU (--device=cuda:0)or CPU (--device=cpu) run
-# python3 ${command} --weights=${model_weights} --output-dir=${output_dir}
+model=regnet_x_1_6gf							
+model_weights="RegNet_X_1_6GF_Weights.IMAGENET1K_V2"
+data_path="/hdd/max/TI/seatbelt/final_dataset/final_dataset_videos/"
 
-# training: multi-gpu distributed data parallel
-torchrun --nproc_per_node 4 ${command} --weights=${model_weights} --output-dir=${output_dir}
+epochs=500									# [20, 50, 100, 300, 500]
+batch_size=352								# [32, 64, 128, 256, 512]
+weight_decay=0.001							# [0.001, 0.0001, 0.00001]
+lr=0.0001									# [0.001, 0.0001, 0.00001]
+lr_warmup_epochs=0							# [0, 5, 10]
+label_smoothing=0.1							# [0.0, 0.1, 0.11]
+lr_scheduler=cosineannealinglr				# [steplr, cosineannealinglr, exponentiallr]
+opt=sgd										# [adamw, rmsprop, sgd]
 
-# testing after the training
-# torchrun --nproc_per_node 4 ${command} --test-only --weights=${output_dir}/checkpoint.pth --output-dir=${output_dir}/test
+train_crop_size=96							# [96, 128, 160, 192, 224, 256]
+val_resize_size=96							# [96, 128, 160, 192, 224, 256] + extra
+val_crop_size=96							# [96, 128, 160, 192, 224, 256]
+
+model_surgery=2								# [0, 1, 2]
+quantization=2								# [0, 1, 2]
+quantization_type=WT8SP2_AT8SP2				# [WT8SP2_AT8SP2, WC8_AT8]
+
+auto_augment=imagenet						# [imagenet, cifar10, svhn]
+random_erase=0.5							# [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+mixup_alpha=0.0								# [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+cutmix_alpha=0.0							# [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+
+opset_version=11							# [9, 11]
+
+# exp_name="v1"
+exp_name="${epochs}-${batch_size}-${weight_decay}-${lr}-${lr_warmup_epochs}-${train_crop_size}-${val_resize_size}-${val_crop_size}-${model_surgery}-${quantization}-${quantization_type}-${opset_version}"
+output_dir="./data/checkpoints/torchvision/${DATE_TIME}_imagenet_classification_${model}_${exp_name}"
+
+#====================================================================================================================
+command="./references/classification/train.py \
+--model=$model --weights=$model_weights --data-path=$data_path --output-dir=$output_dir \
+--model-surgery=$model_surgery --quantization=$quantization --quantization-type=$quantization_type \
+--epochs=$epochs --batch-size=$batch_size --lr=$lr --lr-warmup-epochs=$lr_warmup_epochs \
+--weight-decay=$weight_decay --label-smoothing=$label_smoothing --lr-scheduler=$lr_scheduler --opt=$opt \
+--train-crop-size=$train_crop_size --val-resize-size=$val_resize_size --val-crop-size=$val_crop_size \
+--auto-augment=$auto_augment --random-erase=$random_erase --mixup-alpha=$mixup_alpha --cutmix-alpha=$cutmix_alpha \
+--opset-version=$opset_version"
+#====================================================================================================================
+
+# [ --model-ema --cache-dataset --use-deterministic-algorithms ]
+python3 ${command} --device=cuda:0 --cache-dataset --use-deterministic-algorithms
